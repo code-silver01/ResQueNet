@@ -1,188 +1,269 @@
-# RESQNET — Supervised Browser-Agent Disaster Rescue Coordination
+# RESQNET
 
-> 🚨 **PERMANENT SAFETY NOTICE**: In an emergency, call **112** (or your local disaster helpline) first. RESQNET is a demonstration system and does not dispatch real-world rescue units.
+**From emergency reports to coordinated rescue.**
 
----
+RESQNET is a supervised browser agent that turns a single emergency report into matched, pre-filled and human-approved rescue and relief requests across separate portals, then tracks each request to its outcome.
 
-## 🏆 Track Fit: "Beyond the Browser"
-
-RESQNET demonstrates a supervised browser agent acting in a high-stakes, time-sensitive disaster domain. Rather than merely querying an LLM in a chatbox, the agent **visibly operates real web pages**:
-1. Visibly navigates official disaster management advisory websites.
-2. Explores directory listings for water rescue teams, relief shelters, and hospitals.
-3. Evaluates capability fit, haversine distance, and strict physical accessibility filters (e.g. non-ambulatory wheelchair need).
-4. Navigates into live web forms, populates critical field data, captures a visual screenshot, and **STOPS**.
-5. **Human-in-the-Loop Gate**: The agent *never* submits a form without an explicit, verified human supervisor approval click.
-6. Upon approval, executes the transaction, parses confirmation vouchers from the portal DOM, and updates live status dashboards.
+> **Important:** RESQNET is not an emergency service and does not dispatch rescue. In an emergency, call **112** or your local disaster helpline first. All portals and records bundled with this project are **simulated** for development and demonstration.
 
 ---
 
-## 🛠️ Free Local Stack (NO AWS • NO Voice • 100% Free)
+## Table of contents
 
-- **Frontend & API**: Next.js 15+ (App Router) with React 19, TypeScript, and Tailwind CSS.
-- **Persistence**: SQLite via `better-sqlite3` (zero-config, high-speed local storage, WAL mode enabled).
-- **Browser Agent Engine**: Playwright Chromium (supports both headed mode toggle and headless execution).
-- **AI Triage**: Google Gemini 1.5 Flash (`@google/generative-ai`) with structured JSON schema output, used **strictly for report text → structured incident extraction**.
-- **Real-Time Streaming**: Server-Sent Events (SSE) streaming live agent steps, tool invocations, and visual screenshots to the UI.
-- **Mock Portals**: Self-hosted portals served by Next.js under `/portals/*` with standard HTML forms that Playwright navigates and fills.
+- [Overview](#overview)
+- [The problem](#the-problem)
+- [The solution](#the-solution)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Resource matching](#resource-matching)
+- [Request lifecycle](#request-lifecycle)
+- [Trust and safety](#trust-and-safety)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## 🚀 Quick Start Guide
+## Overview
 
-### 1. Prerequisites
-- Node.js 18+ (tested on Node 20 / 22)
-- Playwright Chromium installed (`npx playwright install chromium`)
-- (Optional) Free Gemini API key from [Google AI Studio](https://aistudio.google.com). *Note: RESQNET includes a built-in deterministic heuristic fallback, so the demo runs even without an API key!*
+During floods and other disasters, the information and services people need are spread across many unconnected websites: official advisories, rescue directories, shelter listings, hospital pages, missing-person registries and relief schemes. People in distress end up searching, comparing and re-typing the same details again and again.
 
-### 2. Installation
+RESQNET acts as a coordination layer on top of those fragmented systems. It does the browsing, extraction, comparison and form-filling, and keeps the human in control of every submission.
+
+## The problem
+
+- Rescue, shelter and relief information lives on different portals with different formats.
+- Affected people must repeat the same details (location, headcount, injuries, mobility needs) to every agency.
+- Generic "rescue near me" searches ignore needs. A wheelchair user in floodwater needs a different resource than someone who can walk to a shelter.
+- Coordinators and families have no shared, trustworthy view of what has been requested, acknowledged or resolved.
+- Unverified listings and real confirmations look the same, so people cannot tell what to rely on.
+
+## The solution
+
+RESQNET converts one report into a structured incident, then a browser agent:
+
+1. opens advisory pages and resource directories,
+2. extracts locations, capabilities, accessibility and contacts,
+3. ranks resources against the incident using transparent, rule-based scoring,
+4. prepares and pre-fills the relevant request forms,
+5. waits for explicit user approval before anything is submitted,
+6. records the portal's actual response and tracks the request's status.
+
+Every record shows where it came from and whether availability has actually been confirmed.
+
+## Features
+
+### Core
+
+- **Incident Intake.** A free-text report is turned into a structured incident: incident type, number of people, location or landmark, injuries, mobility needs, hazards and the resources needed. Everything is editable before the agent runs.
+- **RescueMatch.** The agent browses advisory pages and directories and compares rescue teams, ambulances, shelters and hospitals against the incident. Matching considers capability, distance and accessibility, and shows a per-resource score breakdown.
+- **Approval-gated submission.** The agent fills the request form and stops. A screenshot of the filled form is shown, and nothing is submitted until the user clicks **Approve**. Submission results come from the portal's real confirmation, never from an assumption.
+- **Live incident dashboard.** Every incident and request has an ID, a status, a timeline and a full audit trail of agent steps, source URLs and screenshots.
+- **Source trust labels.** Each record carries a badge (`OFFICIAL`, `USER-REPORTED`, `SIMULATED`), an availability-confirmed flag and a last-checked timestamp.
+
+### Secondary
+
+- **MissingLink.** Searches participating shelter and hospital registries using only publicly exposed fields (name, age range, facility, last-seen area). Candidates are ranked by fuzzy name similarity, age-range overlap and location proximity, and are always labelled *possible match, needs verification by authorised staff*. A tracked missing-person report is created for each search.
+- **Medical Relay.** An optional, consent-gated medical handover. When the user opts in for an incident, a one-page handover (allergies, conditions, medications, emergency contact) is generated and attached to the rescue request. When urgent medical risk is detected, a prominent "Call 112 now" prompt appears before any search runs.
+
+## How it works
+
+```
+Report  →  Extract & confirm  →  Agent browses sources  →  Score & compare
+                                                                │
+Track status  ←  Portal confirmation  ←  Submit on Approve  ←  Fill forms
+```
+
+1. **Report.** The user describes the emergency in plain text (or loads the sample flood report).
+2. **Extract and confirm.** An LLM converts the text into incident JSON. The user reviews and corrects the fields.
+3. **Browse.** The agent opens each source in a real browser, with each step streamed live to the UI.
+4. **Score.** Deterministic rules rank candidate resources; no LLM decides priority or availability.
+5. **Fill.** The agent prepares the structured request (for example `RQ-1042`) and fills the portal forms.
+6. **Approve.** The user reviews the filled form and approves, edits or cancels.
+7. **Submit and track.** After approval the agent submits, parses the confirmation and keeps checking the portal for acknowledgement and resolution.
+
+## Architecture
+
+```
+┌────────────────────┐    report     ┌────────────────────┐   text    ┌────────────────┐
+│  Web UI            │ ────────────► │  API routes        │ ────────► │  LLM           │
+│  Next.js / React   │               │  Next.js (Node)    │ ◄──────── │  (incident /   │
+│  Tailwind          │ ◄──────────── │                    │   JSON    │  page parsing) │
+└─────────▲──────────┘   SSE events  └─────────┬──────────┘           └────────────────┘
+          │                                    │ incident
+          │                          ┌─────────▼──────────┐   browse / fill   ┌─────────────────────┐
+          │                          │  Agent worker      │ ────────────────► │ Advisory page       │
+          │                          │  Playwright        │                   │ (read-only)         │
+          │                          │  + tool functions  │                   │ Rescue / Shelter /  │
+          │                          └─────────┬──────────┘ ◄──────────────── │ Hospital / Registry │
+          │                                    │   results                    │ portals (simulated) │
+          │                          ┌─────────▼──────────┐                   └─────────────────────┘
+          └────────────────────────  │  Scorer + SQLite   │
+                                     │  incidents, requests, resources,
+                                     │  agent steps, reports, handovers
+                                     └────────────────────┘
+```
+
+### Agent tools
+
+| Tool | Purpose |
+|---|---|
+| `search_official_sources` | Find and read official advisory and relief pages |
+| `open_resource_directory` | Navigate to a rescue, shelter or hospital listing |
+| `extract_resource_details` | Pull location, capabilities, accessibility and contacts |
+| `compare_resources` | Score and rank resources against the incident |
+| `prepare_rescue_request` | Build the structured request |
+| `fill_rescue_form` | Fill an external request or registration form |
+| `track_request` | Check acknowledgement and status on the portal |
+| `find_relief_schemes` | Search relief and assistance pages |
+
+## Tech stack
+
+| Layer | Technology | Role |
+|---|---|---|
+| Frontend | Next.js (App Router), TypeScript, Tailwind CSS | UI, approval screen, dashboard |
+| Backend | Next.js API routes, Node worker | Orchestration and agent control |
+| Browser agent | Playwright (Chromium) | Navigation, extraction, form filling, screenshots |
+| AI | Gemini API with JSON-schema output | Report-to-incident extraction and fallback page parsing |
+| Matching | Deterministic rule-based scorer | Transparent resource ranking |
+| Database | SQLite | Incidents, requests, resources, audit trail |
+| Live updates | Server-Sent Events | Real-time agent activity stream |
+| Portals | Bundled simulated portals under `/portals/*` | Safe targets for form filling and tracking |
+
+## Resource matching
+
+Matching is rule-based and fully explainable.
+
+**Hard filters**
+
+- The resource's capability must cover the needed resource type.
+- If the incident includes people needing mobility assistance, shelters must be wheelchair accessible.
+
+**Score (0-100)**
+
+| Factor | Weight |
+|---|---|
+| Capability fit | 40 |
+| Distance (haversine) | 30 |
+| Accessibility fit | 15 |
+| Verification level | 10 |
+| Data freshness | 5 |
+
+**Incident priority** is also rule-based: hazard exposure, mobility limitation, medical need, and presence of children or elderly people each add weighted points, scaled by headcount. The breakdown is always shown.
+
+## Request lifecycle
+
+| Status | Meaning | Set by |
+|---|---|---|
+| Reported | Incident captured and confirmed by the user | RESQNET |
+| Matched | Suitable resources identified | RESQNET |
+| Submitted | Request actually submitted to a portal (with a parsed confirmation) | RESQNET |
+| Acknowledged | Portal confirmed receipt | Portal response |
+| Verified | Details checked by an authorised coordinator | Coordinator |
+| Resolved | Assistance confirmed as completed | Coordinator |
+
+A failed submission is shown as **Submission failed** with the reason. RESQNET never shows "dispatched" or implies a rescue is on its way.
+
+## Trust and safety
+
+- A permanent banner directs users to **112 / local disaster helpline** first.
+- The agent **never submits** without an explicit user approval.
+- Every record is badged `OFFICIAL`, `USER-REPORTED` or `SIMULATED`, with an availability-confirmed flag and a last-checked time.
+- The LLM only extracts structure from text. It does not rank resources, assign priority or claim availability.
+- Medical data is stored locally, attached only with per-incident consent, and never scraped from third parties.
+- MissingLink uses only public registry fields and never states that a person has been found; results are possible matches pending human verification.
+- Real public pages are accessed read-only. Form submission only targets the bundled simulated portals.
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 18 or later
+- A Gemini API key
+
+### Installation
+
 ```bash
-git clone <repo-url>
-cd ResQueNet
+git clone https://github.com/<your-username>/resqnet.git
+cd resqnet
 npm install
 npx playwright install chromium
+cp .env.example .env
 ```
 
-### 3. Configure Environment
-Copy `.env.local.example` to `.env.local`:
-```bash
-cp .env.local.example .env.local
-```
+Add your API key to `.env`, then seed the database and start the app:
 
-| Environment Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | Optional | Free Google AI Studio API key (heuristic fallback provided if omitted) |
-| `PLAYWRIGHT_HEADLESS` | Optional | Set to `false` to visibly watch the browser open and fill forms on your monitor! (Default: `true`) |
-| `NEXT_PUBLIC_BASE_URL` | Optional | Base URL for local mock portals (Default: `http://localhost:3000`) |
-
-### 4. Run the Development Server
 ```bash
+npm run seed
 npm run dev
 ```
-Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
----
+Open `http://localhost:3000`.
 
-## ⏱️ 3-Minute Interactive Demo Script
+### Quick tour
 
-Follow this script to experience the full end-to-end workflow in under 3 minutes:
+1. Click **Use sample flood report**.
+2. Review and confirm the extracted incident.
+3. Watch the agent open sources and build the comparison table.
+4. Review the pre-filled rescue request and click **Approve**.
+5. Open `/portals/admin` and mark the request **Acknowledged**.
+6. Watch the dashboard status update.
+7. Try **Find a person** and the medical handover from the incident page.
 
-### Step 1: One-Click Flood Rescue Launch (0:00 – 0:30)
-1. Open [http://localhost:3000](http://localhost:3000).
-2. Notice the permanent red **112 Emergency Banner** at the top.
-3. Click the blue button: **"🚀 Launch Live Coordination"** (or go to `/report` and click *"Use Sample Flood Report"*).
-4. Watch the incident register in SQLite:
-   - **Disaster Type**: Flood / Rising Water
-   - **Party Headcount**: 4 People
-   - **Special Needs**: Water / Boat Rescue, Medical Assistance
-   - **Mobility**: 1 Elderly Non-Ambulatory Individual
-   - **Deterministic Priority Score**: **10 / 15 (Critical)** with full breakdown.
+## Configuration
 
-### Step 2: Supervised Agent Execution & Multi-Page Traversal (0:30 – 1:30)
-You are redirected to the live agent execution view (`/agent/[incidentId]`). Watch the live SSE feed as Playwright runs the following 7 tool steps:
-1. `search_official_sources`: Visibly visits the official NDMA advisory page (or fallback snapshot) to verify active flood alerts. Badge: **OFFICIAL**.
-2. `open_resource_directory`: Navigates to `/portals/rescue` and catalogs 4 specialized rescue strike teams.
-3. `open_resource_directory`: Navigates to `/portals/shelters` and inspects capacity and wheelchair ramp availability.
-4. `extract_resource_details`: Reads `/portals/hospitals` for 24/7 emergency trauma centers.
-5. `compare_resources`: Computes deterministic scoring:
-   - **Capability Fit**: 40 pts max
-   - **Haversine Distance**: 30 pts max
-   - **Accessibility Fit**: 15 pts max
-   - **Verification Level**: 10 pts max
-   - **Data Freshness**: 5 pts max
-   - ⚠️ **Strict Hard Filter**: Automatically strikes out non-accessible shelters (`School Emergency Camp`, `Elevated Ground Camp`) because the party has an elderly non-ambulatory member.
-6. `prepare_rescue_request`: Formulates request package `RQ-####`.
-7. `fill_rescue_form`: Visibly opens `/portals/rescue/request`, fills in every field, takes a high-resolution screenshot, and **STOPS**.
+| Variable | Description | Default |
+|---|---|---|
+| `GEMINI_API_KEY` | API key for incident extraction and fallback parsing | required |
+| `HEADLESS` | Run the agent browser headless (`true`) or visible (`false`) | `false` |
+| `REAL_ADVISORY_URL` | Optional public advisory page to read (read-only) | cached snapshot |
+| `DATABASE_PATH` | SQLite file location | `./data/resqnet.db` |
 
-### Step 3: Human Approval Gate & Verified Submission (1:30 – 2:15)
-1. In the right panel, observe the yellow **"Approval Required"** card.
-2. Click the screenshot thumbnail to inspect the filled form in the full-resolution lightbox.
-3. The agent has paused — no transaction has occurred.
-4. Click **"✓ Approve Submission"**.
-5. The agent re-engages, clicks `#submit-request-btn`, waits for the portal to generate a voucher, and reads the confirmation text (`RESC-####`).
-6. Status updates to **Submitted**.
-
-### Step 4: Live Dashboard & Simulated Dispatcher Verification (2:15 – 3:00)
-1. Navigate to **[Incident Dashboard](/dashboard)**.
-2. Observe the lifecycle ribbon: `Reported` → `Matched` → `Submitted`.
-3. Expand your incident to view coordinates, needs, and the complete audit timeline with clickable screenshots.
-4. Open the **[Admin Portal](/portals/admin)** in a new tab:
-   - Click **"Acknowledge"** to simulate municipal dispatch confirmation.
-   - Return to the Dashboard and watch the status update to `Acknowledged` in real-time.
-5. Visit **[Find a Person](/find)** (MissingLink):
-   - Search for `"Raju"` (Age 35).
-   - Review fuzzy Levenshtein matches from shelter and hospital logs.
-   - Notice the mandatory safety disclaimer on every result: *"POSSIBLE MATCH: must be verified by authorised staff"*.
-6. Visit **[Medical Relay](/medical/[incidentId])**:
-   - Inspect the generated one-page medical handover report with allergy highlights.
-   - Click **"Print Official Handover"** to see the clean printable print sheet.
-
----
-
-## 🛡️ Built-in Safety Enforcements
-
-1. **Permanent 112 Banner**: Sticky red warning banner on every page reminds users that RESQNET does not replace official emergency helplines.
-2. **Strict Approval Gate**: The Playwright agent never executes a form submit action without explicit human approval.
-3. **No False Promises**: The UI and code strictly prohibit language like *"dispatched"* or *"rescue on the way"*. Only confirmed portal states are shown.
-4. **Deterministic Ranking**: The LLM is restricted to initial schema parsing. Ranking and scoring are 100% deterministic with transparent point breakdowns.
-5. **Source Attribution**: Every record carries an explicit badge: `OFFICIAL`, `USER-REPORTED`, or `SIMULATED`, along with availability status and last checked time.
-6. **MissingLink Safeguard**: Missing person search results are strictly labeled *"POSSIBLE MATCH: must be verified by authorised staff"*; the system never asserts a person has been found.
-
----
-
-## 🐳 Deployment (Docker / Railway / Render / VPS)
-
-Because RESQNET features an autonomous **Playwright Chromium browser** and a local **SQLite** database, persistent container environments are recommended over standard serverless platforms:
-
-### Run with Docker
-```bash
-docker build -t resqnet .
-docker run -p 3000:3000 --env-file .env.local resqnet
-```
-
-### 1-Click Cloud Deployment (Railway / Render / Fly.io)
-1. Fork or push this repository to GitHub.
-2. In **Railway** or **Render**, choose **Deploy from GitHub repo**.
-3. It will automatically detect the `Dockerfile` or Node environment.
-4. Set optional environment variable `GEMINI_API_KEY` in the dashboard.
-5. Your instance will deploy with headless Chromium and live SSE streaming enabled!
-
----
-
-## 📂 Project Structure
+## Project structure
 
 ```
-├── src/
-│   ├── app/
-│   │   ├── page.tsx                     # Landing page with One-Click Flood Demo
-│   │   ├── report/page.tsx              # Incident intake & Gemini extraction review
-│   │   ├── agent/[incidentId]/page.tsx  # Live SSE browser agent execution & approval
-│   │   ├── dashboard/page.tsx           # Incident pipeline & audit trail
-│   │   ├── find/page.tsx                # MissingLink fuzzy person locator
-│   │   ├── medical/[incidentId]/page.tsx# Medical Relay handover preview & print
-│   │   ├── portals/                     # Mock portals visited by Playwright
-│   │   │   ├── rescue/                  # Rescue team directory & request form
-│   │   │   ├── shelters/                # Shelter directory & register form
-│   │   │   ├── hospitals/               # Emergency hospital directory
-│   │   │   ├── admin/                   # Coordinator dispatcher view
-│   │   │   └── registry/                # Public shelter & hospital registries
-│   │   └── api/                         # Backend API handlers & SSE endpoints
-│   ├── components/                      # SafetyBanner, SourceBadge, StatusBadge, Navbar
-│   └── lib/
-│       ├── agent/                       # Playwright loop, tools & screenshots
-│       ├── db/                          # SQLite schema, connection & seed data
-│       ├── gemini.ts                    # Structured Gemini JSON extraction
-│       ├── scorer.ts                    # Deterministic resource scoring & filters
-│       ├── priority.ts                  # Rule-based priority calculator
-│       ├── haversine.ts                 # Geospatial distance calculator
-│       ├── locations.ts                 # Seeded landmarks & coordinate lookup
-│       ├── fuzzyMatch.ts                # Levenshtein & token similarity
-│       └── handover.ts                  # Emergency medical handover generator
-├── resqnet.db                           # Local SQLite database (auto-created)
-├── public/screenshots/                  # Visual captures saved by Playwright agent
-└── next.config.ts                       # Server externals for better-sqlite3 & Playwright
+resqnet/
+├── app/                    # Next.js pages and API routes
+│   ├── (ui)/               # report, confirm, agent run, approval, dashboard
+│   ├── api/                # incidents, requests, SSE stream, MissingLink, handover
+│   └── portals/            # simulated rescue, shelter, hospital, registry, admin portals
+├── agent/                  # Playwright worker and tool functions
+├── lib/
+│   ├── scoring/            # rule-based matching and priority scoring
+│   ├── extraction/         # LLM incident and page extraction
+│   └── db/                 # schema, queries, seed data
+├── data/                   # SQLite file and cached advisory snapshot
+├── public/screenshots/     # agent step screenshots
+└── README.md
 ```
 
----
+## Limitations
 
-## 📜 License
-MIT License. Built for the Google DeepMind "Beyond the Browser" Hackathon Track.
+- Bundled portals and records are simulated; no real rescue availability is implied.
+- Intake is text-based in the current version.
+- The agent depends on page structure; the LLM fallback and cached snapshots reduce but do not remove this fragility.
+- Distance uses straight-line calculation, not road or flood-aware routing.
+- This is not a substitute for emergency services.
+
+## Roadmap
+
+- Voice intake with real-time speech recognition and spoken read-back
+- Cloud backend: managed auth, queues, notifications and a containerised browser worker
+- Multilingual intake and responses for regional languages
+- Flood-aware routing and live resource status feeds
+- Fuller MissingLink and Medical Relay with formal consent and data-governance controls
+- Adapters for additional portals and disaster types
+
+## Contributing
+
+Contributions are welcome. Please open an issue to discuss a change, keep new portal adapters isolated under `agent/`, and include tests for any scoring changes.
+
+## License
+
+Add a license of your choice (for example MIT) in a `LICENSE` file.
