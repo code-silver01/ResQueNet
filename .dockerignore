@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.env*
+!.env.local.example
+resqnet.db*
+public/screenshots/*.png
+!public/screenshots/.gitkeep
+README.md
